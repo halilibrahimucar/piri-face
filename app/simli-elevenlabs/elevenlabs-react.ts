@@ -149,6 +149,21 @@ function useConversation(defaultConfig: Partial<ConversationConfig> = {}) {
         return conversationRef.current?.getOutputVolume() ?? 0;
     };
 
+    /**
+     * Send context information to the agent
+     */
+    const sendContext = (context: {
+        userInfo?: {
+            age?: number;
+            gender?: string;
+            emotion?: string;
+            detected?: boolean;
+        };
+        customData?: Record<string, any>;
+    }) => {
+        conversationRef.current?.sendContext(context);
+    };
+
     return {
         // Session management
         startSession,
@@ -160,6 +175,9 @@ function useConversation(defaultConfig: Partial<ConversationConfig> = {}) {
         getOutputByteFrequencyData,
         getInputVolume,
         getOutputVolume,
+        
+        // Context management
+        sendContext,
         
         // State
         status: connectionStatus,

@@ -2,6 +2,14 @@
 
 ElevenLabs Conversational AI API ile Simli avatar entegrasyonu. Yeni ElevenLabs API yapısına uyumlu.
 
+## 🎯 Özellikler
+
+- ✅ **ElevenLabs Conversational AI** entegrasyonu
+- ✅ **Simli Avatar** görselleştirme
+- ✅ **Yüz Analizi**: Kameradan ziyaretçiyi analiz eder (yaş, cinsiyet, duygu)
+- ✅ **Kişiselleştirilmiş Yanıtlar**: Analiz sonuçlarına göre agent'ın cevaplarını özelleştirir
+- ✅ **Gerçek Zamanlı İletişim**: Sesli ve görsel etkileşim
+
  ## Usage
  1. Rename .env_sample to .env and paste your API keys: [SIMLI-API-KEY](https://www.simli.com/profile) and [ELEVENLABS-API-KEY](https://elevenlabs.io/app/settings/api-keys) <br/> If you want to try Simli but don't have API access to these third parties, ask in Discord and we can help you out with that ([Discord Link](https://discord.gg/yQx49zNF4d)). 
 ```js
@@ -26,6 +34,15 @@ const avatar = {
   simli_faceid: "5514e24d-6086-46a3-ace4-6a7264e5cb7c",
 };
 ```
+
+5. **Yüz Analizi Özelliği**: Sistem otomatik olarak kameradan ziyaretçiyi analiz eder ve agent'a context gönderir. Agent'ın prompt'unu buna göre özelleştirebilirsiniz:
+   - Yaş tespiti
+   - Cinsiyet tespiti  
+   - Duygu analizi (mutlu, üzgün, kızgın, vb.)
+   - Gerçek zamanlı context güncellemesi
+
+   **ÖNEMLİ**: Agent'ın yüz analizi bilgisini kullanması için prompt'unu güncellemeniz gerekiyor!
+   Detaylı bilgi için: `AGENT_PROMPT_GUIDE.md` dosyasına bakın.
 
 ## Characters
 You can swap out the character by finding one that you like in the [docs](https://docs.simli.com/introduction), or [create your own](https://app.simli.com/) 

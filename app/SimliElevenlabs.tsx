@@ -8,6 +8,7 @@ import cn from "./utils/TailwindMergeAndClsx";
 import IconSparkleLoader from "@/media/IconSparkleLoader";
 import IconFaceTime from "@/media/IconFaceTime";
 import { getElevenLabsSignedUrl } from "./actions/actions";
+import { FaceAnalyzer, FaceAnalysisResult } from "./utils/faceAnalysis";
 
 // SimliClient'ı dinamik olarak yüklüyoruz
 let SimliClient: any = null;
@@ -30,6 +31,12 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
   const simliClientRef = useRef<any>(null);
+  const userCameraRef = useRef<HTMLVideoElement>(null);
+  const userCameraPreviewRef = useRef<HTMLVideoElement>(null);
+  const userCameraStreamRef = useRef<MediaStream | null>(null);
+  const faceAnalyzerRef = useRef<FaceAnalyzer | null>(null);
+  const [faceAnalysis, setFaceAnalysis] = useState<FaceAnalysisResult | null>(null);
+  const [isUserCameraActive, setIsUserCameraActive] = useState(false);
 
   // SimliClient'ı önceden yükle
   useEffect(() => {
@@ -49,12 +56,27 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
     }
   }, []);
 
+  // Start face analysis function (defined after conversation to avoid circular dependency)
+  const startFaceAnalysisRef = useRef<(() => void) | null>(null);
+
   const conversation = useConversation({
     onConnect: () => {
       console.log("ElevenLabs conversation connected");
       setIsAvatarVisible(true);
       setIsRinging(false);
       setIsLoading(false);
+      
+      // Start face analysis when connected (with delay to ensure camera is ready)
+      // Kameranın hazır olduğundan emin ol
+      const checkCameraAndStartAnalysis = () => {
+        if (userCameraRef.current && userCameraRef.current.videoWidth > 0) {
+          startFaceAnalysisRef.current?.();
+        } else {
+          console.log("Kamera henüz hazır değil, bekleniyor...");
+          setTimeout(checkCameraAndStartAnalysis, 500);
+        }
+      };
+      setTimeout(checkCameraAndStartAnalysis, 1000);
     },
 
     onDisconnect: () => {
@@ -63,6 +85,9 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
       setIsRinging(false);
       simliClientRef.current?.ClearBuffer();
       simliClientRef.current?.close();
+      
+      // Stop face analysis when disconnected
+      stopFaceAnalysis();
     },
 
     onMessage: (message) => {
@@ -89,6 +114,88 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
       }
     },
   });
+
+  // Start face analysis (defined after conversation)
+  const startFaceAnalysis = useCallback(async () => {
+    try {
+      // Wait for camera to be ready
+      if (!userCameraRef.current || !userCameraRef.current.videoWidth) {
+        console.log("Waiting for camera to be ready...");
+        setTimeout(() => startFaceAnalysis(), 500);
+        return;
+      }
+
+      if (!faceAnalyzerRef.current) {
+        // Initialize face analyzer
+        faceAnalyzerRef.current = new FaceAnalyzer();
+        await faceAnalyzerRef.current.loadModels();
+      }
+
+      let firstDetection = true; // İlk tespit için özel mesaj
+      let lastContextSent = ''; // Son gönderilen context'i takip et
+
+      if (userCameraRef.current && faceAnalyzerRef.current) {
+        await faceAnalyzerRef.current.startAnalysis(
+          userCameraRef.current,
+          (result: FaceAnalysisResult) => {
+            setFaceAnalysis(result);
+            
+            // Send context to ElevenLabs agent
+            if (result.detected) {
+              const contextKey = `${result.age}-${result.gender}-${result.emotion}`;
+              
+              // Context değiştiyse veya ilk tespitse gönder
+              if (firstDetection || lastContextSent !== contextKey) {
+                lastContextSent = contextKey;
+                
+                // Context'i agent'a gönder
+                conversation.sendContext({
+                  userInfo: {
+                    detected: true,
+                    age: result.age,
+                    gender: result.gender,
+                    emotion: result.emotion
+                  },
+                  customData: {
+                    expressions: result.expressions,
+                    confidence: result.confidence,
+                    firstDetection: firstDetection
+                  }
+                });
+
+                // İlk tespitte agent'a bilgi ver (sessizce - sistem mesajı olarak)
+                if (firstDetection) {
+                  firstDetection = false;
+                  console.log("👤 Yüz tespit edildi - Agent'a bildiriliyor...");
+                  
+                  // Agent'a context'i kullanması için bilgi ver
+                  // Not: Bu bilgi agent'ın prompt'unda olmalı
+                  // Şimdilik sadece log'layalım
+                }
+              }
+            } else {
+              // Yüz tespit edilmediyse, firstDetection'i sıfırla
+              if (!firstDetection) {
+                firstDetection = true;
+                lastContextSent = '';
+              }
+            }
+          },
+          2000 // Analyze every 2 seconds
+        );
+        console.log("Face analysis started");
+      }
+    } catch (error) {
+      console.error("Error starting face analysis:", error);
+      // Face analysis is optional, don't throw error
+    }
+  }, [conversation]);
+
+  // Update ref when startFaceAnalysis changes
+  useEffect(() => {
+    startFaceAnalysisRef.current = startFaceAnalysis;
+  }, [startFaceAnalysis]);
+
 
   const initializeSimliClient = useCallback(async () => {
     try {
@@ -170,6 +277,45 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
     }
   };
 
+  // Start user camera for face analysis and preview
+  // Not: Kamera artık handleStart içinde başlatılıyor
+  const startUserCamera = useCallback(async () => {
+    // Bu fonksiyon artık kullanılmıyor, kamera handleStart'ta başlatılıyor
+    console.log("startUserCamera called - but camera is already started in handleStart");
+  }, []);
+
+  // Stop user camera
+  const stopUserCamera = useCallback(() => {
+    // Preview video stream'ini kapat
+    if (userCameraPreviewRef.current) {
+      userCameraPreviewRef.current.srcObject = null;
+    }
+    
+    // Ana stream'i kapat
+    if (userCameraStreamRef.current) {
+      userCameraStreamRef.current.getTracks().forEach(track => track.stop());
+      userCameraStreamRef.current = null;
+    }
+    
+    if (userCameraRef.current) {
+      userCameraRef.current.srcObject = null;
+    }
+    
+    setIsUserCameraActive(false);
+    console.log("User camera stopped");
+  }, []);
+
+
+  // Stop face analysis
+  const stopFaceAnalysis = useCallback(() => {
+    if (faceAnalyzerRef.current) {
+      faceAnalyzerRef.current.stopAnalysis();
+      faceAnalyzerRef.current = null;
+      console.log("Face analysis stopped");
+    }
+    stopUserCamera();
+  }, [stopUserCamera]);
+
   const handleStart = useCallback(async () => {
     try {
       if (!SimliClient) {
@@ -181,8 +327,66 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
       setIsRinging(true);
       setError("");
 
-      // Önce mikrofon izni al
-      await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Önce mikrofon ve kamera izni birlikte al
+      console.log("📹 Kamera ve mikrofon izni isteniyor...");
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+          audio: true,
+          video: { 
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            facingMode: 'user',
+            aspectRatio: { ideal: 16/9 }
+          }
+        });
+        console.log("✅ Kamera ve mikrofon izni alındı");
+        
+        // Video ve audio stream'lerini ayır
+        const videoTracks = stream.getVideoTracks();
+        const audioTracks = stream.getAudioTracks();
+        
+        // Kullanıcı kamerayı başlat (sadece video) - önce tam ekran göster
+        if (userCameraRef.current && videoTracks.length > 0) {
+          const videoStream = new MediaStream(videoTracks);
+          
+          // Stream'i ref'te sakla (preview için gerekli)
+          userCameraStreamRef.current = videoStream;
+          
+          // Ana video elementi (tam ekran)
+          userCameraRef.current.srcObject = videoStream;
+          
+          // Video yüklendiğinde oynat
+          const playVideo = async () => {
+            try {
+              if (userCameraRef.current) {
+                await userCameraRef.current.play();
+                setIsUserCameraActive(true);
+                console.log("✅ Kullanıcı kamerası aktif - tam ekran görüntü gösteriliyor");
+              }
+            } catch (playError) {
+              console.error("Video play hatası:", playError);
+            }
+          };
+          
+          userCameraRef.current.onloadedmetadata = playVideo;
+          
+          // Eğer metadata zaten yüklendiyse
+          if (userCameraRef.current.readyState >= 2) {
+            await playVideo();
+          }
+        } else {
+          console.warn("⚠️ Video track bulunamadı");
+        }
+        
+        // Audio stream'i kapat (SimliClient kendi audio stream'ini kullanacak)
+        audioTracks.forEach(track => {
+          track.stop();
+          stream.removeTrack(track);
+        });
+      } catch (error: any) {
+        console.error("Kamera/mikrofon izni hatası:", error);
+        throw new Error(`Kamera erişimi başarısız: ${error.message}. Lütfen kamera iznini kontrol edin.`);
+      }
       
       // SimliClient'ı başlat
       await initializeSimliClient();
@@ -232,8 +436,10 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
       setIsLoading(false);
       setIsRinging(false);
       setIsAvatarVisible(false);
+      stopFaceAnalysis();
+      stopUserCamera();
     }
-  }, [agentId, conversation, initializeSimliClient]);
+  }, [agentId, conversation, initializeSimliClient, stopFaceAnalysis, stopUserCamera]);
 
   const handleStop = useCallback(() => {
     console.log("Stopping interaction...");
@@ -245,13 +451,14 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
     conversation.endSession();
     simliClientRef.current?.close();
     simliClientRef.current = null;
-  }, [conversation]);
+    stopFaceAnalysis();
+  }, [conversation, stopFaceAnalysis]);
 
   return (
-    <div className="relative w-full h-full">
+    <div className="relative w-full h-full bg-black overflow-hidden">
       {error && (
-        <div className="absolute top-4 left-0 right-0 z-30 px-4">
-          <div className="bg-red-500 text-white p-4 rounded-lg text-center">
+        <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-40 px-4 max-w-md">
+          <div className="bg-red-500 text-white p-4 rounded-lg text-center shadow-2xl backdrop-blur-sm">
             {error}
           </div>
         </div>
@@ -259,32 +466,131 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
 
       <RingtoneAudio isPlaying={isRinging} />
 
-      {/* DottedFace her zaman arka planda görünür */}
+      {/* DottedFace - sadece kamera aktif değilse görünür */}
       <div className={cn(
         "absolute inset-0 z-0 transition-opacity duration-300",
-        isAvatarVisible ? "opacity-0" : "opacity-100"
+        (!isAvatarVisible && !isUserCameraActive) ? "opacity-100" : "opacity-0 pointer-events-none"
       )}>
         <DottedFace />
       </div>
 
-      {/* Video görüntüsü */}
+      {/* Kullanıcı kamerası - Tam ekran (sohbete başlamadan önce) - Avatar gibi */}
+      {!isAvatarVisible && (
+        <div className={cn(
+          "fixed inset-0 z-10 bg-black transition-opacity duration-500",
+          isUserCameraActive ? "opacity-100" : "opacity-0 pointer-events-none"
+        )}>
+          <video
+            ref={userCameraRef}
+            className="w-full h-full object-cover scale-x-[-1]"
+            autoPlay
+            playsInline
+            muted
+          />
+        </div>
+      )}
+
+      {/* Avatar video görüntüsü - Ana ekran (bağlantı kurulduğunda) */}
       <div className={cn(
-        "absolute inset-0 z-10 transition-opacity duration-300",
-        isAvatarVisible ? "opacity-100" : "opacity-0"
+        "fixed inset-0 z-10 bg-black transition-opacity duration-500",
+        isAvatarVisible ? "opacity-100" : "opacity-0 pointer-events-none"
       )}>
         <VideoBox video={videoRef} audio={audioRef} />
       </div>
+
+      {/* User camera preview - FaceTime style (sağ alt, avatar görünürken) */}
+      {isAvatarVisible && isUserCameraActive && (
+        <div 
+          className="fixed z-[100] rounded-2xl overflow-hidden shadow-2xl border-2 border-white/30 bg-black/50 backdrop-blur-sm"
+          style={{
+            bottom: '112px', // Butonların üstünde (bottom-6 = 24px, buton yüksekliği 64px + gap)
+            right: '16px',   // right-4 = 16px
+            width: 'clamp(128px, 20vw, 176px)',  // Responsive: w-32 (128px) to md:w-44 (176px)
+            height: 'clamp(160px, 25vw, 220px)', // Responsive: h-40 (160px) to md:h-55 (220px)
+            maxWidth: '176px',
+            maxHeight: '220px',
+          }}
+        >
+          <video
+            ref={(el) => {
+              // Ref'i güncelle
+              if (userCameraPreviewRef) {
+                (userCameraPreviewRef as any).current = el;
+              }
+              
+              // Stream'i hemen bağla (eğer henüz bağlanmadıysa)
+              if (el && userCameraStreamRef.current && !el.srcObject) {
+                const stream = userCameraStreamRef.current;
+                const videoTracks = stream.getVideoTracks();
+                if (videoTracks.length > 0) {
+                  // Yeni bir MediaStream oluştur (aynı track'leri kullan)
+                  const previewStream = new MediaStream(videoTracks);
+                  el.srcObject = previewStream;
+                  
+                  // Video oynat
+                  el.play()
+                    .then(() => {
+                      console.log("✅ Preview video'ya stream bağlandı ve oynatılıyor");
+                    })
+                    .catch((err) => {
+                      console.error("Preview video play error:", err);
+                      // Retry after element is ready
+                      setTimeout(() => {
+                        if (el && el.srcObject) {
+                          el.play().catch(console.error);
+                        }
+                      }, 300);
+                    });
+                }
+              }
+            }}
+            className="w-full h-full object-cover scale-x-[-1]"
+            autoPlay
+            playsInline
+            muted
+          />
+          {/* User camera overlay with face analysis info */}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/60 via-transparent to-transparent pointer-events-none">
+            {faceAnalysis?.detected && (
+              <div className="absolute bottom-0 left-0 right-0 p-3 text-white">
+                <div className="flex items-center gap-2 mb-2">
+                  <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse shadow-lg shadow-green-500/50"></div>
+                  <span className="font-semibold text-sm">Aktif</span>
+                </div>
+                {process.env.NODE_ENV === 'development' && (
+                  <div className="text-[10px] opacity-80 space-y-0.5">
+                    <div>👤 {faceAnalysis.age} yaş</div>
+                    <div>😊 {faceAnalysis.emotion}</div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Face analysis info (debug - top left, smaller) */}
+      {faceAnalysis?.detected && process.env.NODE_ENV === 'development' && (
+        <div className="absolute top-4 left-4 z-30 bg-black bg-opacity-70 text-white p-2 rounded-lg text-xs backdrop-blur-sm">
+          <div className="font-semibold mb-1">Yüz Analizi</div>
+          <div>Yaş: {faceAnalysis.age}</div>
+          <div>Cinsiyet: {faceAnalysis.gender}</div>
+          <div>Duygu: {faceAnalysis.emotion}</div>
+          <div>Güven: {((faceAnalysis.confidence || 0) * 100).toFixed(0)}%</div>
+        </div>
+      )}
       
-      {/* Kontrol butonları */}
-      <div className="fixed bottom-8 left-0 right-0 z-20 px-4">
-        <div className="flex justify-center">
+      {/* Kontrol butonları - FaceTime style */}
+      <div className="fixed bottom-6 left-0 right-0 z-20 px-4">
+        <div className="flex justify-center items-center gap-4">
           {!isAvatarVisible ? (
             <button
               onClick={handleStart}
               disabled={isLoading || !isSimliClientLoaded}
               className={cn(
-                "w-16 h-16 disabled:bg-[#343434] disabled:text-white bg-green-500 text-white rounded-full transition-all duration-300 hover:bg-green-600",
-                "flex justify-center items-center"
+                "w-16 h-16 disabled:bg-[#343434] disabled:text-white/50 bg-green-500 text-white rounded-full transition-all duration-300 hover:bg-green-600 hover:scale-110",
+                "flex justify-center items-center shadow-2xl border-4 border-white/20",
+                "disabled:cursor-not-allowed"
               )}
             >
               {isLoading ? (
@@ -297,8 +603,8 @@ const SimliElevenlabs: React.FC<SimliElevenlabsProps> = ({
             <button
               onClick={handleStop}
               className={cn(
-                "w-16 h-16 bg-red-500 text-white rounded-full transition-all duration-300 hover:bg-red-600",
-                "flex justify-center items-center"
+                "w-16 h-16 bg-red-500 text-white rounded-full transition-all duration-300 hover:bg-red-600 hover:scale-110",
+                "flex justify-center items-center shadow-2xl border-4 border-white/20"
               )}
             >
               <IconFaceTime className="w-8 h-8 rotate-180" />

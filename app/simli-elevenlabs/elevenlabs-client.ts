@@ -779,6 +779,69 @@ class ConversationManager {
     }
 
     /**
+     * Send context information to the agent
+     * This allows the agent to personalize responses based on user information
+     * 
+     * Note: ElevenLabs API may not support context_update event directly.
+     * If this doesn't work, you may need to:
+     * 1. Update the agent's prompt with user context dynamically
+     * 2. Use custom events or message formatting
+     * 3. Send context as part of user message
+     */
+    sendContext(context: {
+        userInfo?: {
+            age?: number;
+            gender?: string;
+            emotion?: string;
+            detected?: boolean;
+        };
+        customData?: Record<string, any>;
+    }) {
+        if (this.connectionStatus === "connected" && this.connection.socket.readyState === WebSocket.OPEN) {
+            try {
+                // Try sending as custom event
+                // ElevenLabs API'ye context gönder (format may vary)
+                const contextMessage = JSON.stringify({
+                    type: "context_update",
+                    context: context,
+                    // Alternative: Try sending as user message with context
+                    // type: "user_message",
+                    // message: `[CONTEXT: ${JSON.stringify(context)}]`
+                });
+                this.connection.socket.send(contextMessage);
+                
+                // Context bilgisini logla
+                const userInfo = context.userInfo;
+                if (userInfo?.detected) {
+                    console.log("👤 Yüz Analizi Context Gönderildi:", {
+                        yaş: userInfo.age,
+                        cinsiyet: userInfo.gender,
+                        duygu: userInfo.emotion
+                    });
+                    
+                    // İlk tespitte özel log
+                    if (context.customData?.firstDetection) {
+                        console.log("🎯 İlk yüz tespiti! Agent'ın prompt'unda bu bilgiyi kullanması gerekiyor.");
+                        console.log("📝 Lütfen agent prompt'unu güncelleyin: AGENT_PROMPT_GUIDE.md dosyasına bakın");
+                    }
+                }
+                
+                // Debug için
+                this.settings.onDebug({
+                    type: "context_sent",
+                    context: context,
+                    note: "Agent'ın bu bilgiyi kullanması için prompt'unu güncellemeniz gerekiyor"
+                });
+            } catch (error) {
+                console.error("Error sending context:", error);
+                // Context gönderme başarısız olsa bile devam et
+            }
+        } else {
+            console.warn("⚠️ Context gönderilemedi: WebSocket bağlı değil");
+        }
+    }
+
+    /**
      * Audio analysis methods for visualizations
      */
     getInputFrequencyData() {
